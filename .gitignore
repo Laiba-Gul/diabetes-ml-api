@@ -1,0 +1,54 @@
+# ---- Data: never commit datasets ----
+data/*
+!data/.gitkeep
+*.csv
+*.tsv
+*.parquet
+*.xlsx
+
+# ---- Model artifacts (rebuilt by training / Docker build) ----
+models/*
+!models/.gitkeep
+*.joblib
+*.pkl
+*.pickle
+
+# ---- Secrets & credentials ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*credentials*.json
+*service-account*.json
+*-sa-key.json
+gcloud-key.json
+.aws/
+.azure/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# ---- Tooling ----
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+
+# ---- OS / editors ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
