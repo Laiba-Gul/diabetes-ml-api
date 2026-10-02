@@ -8,7 +8,9 @@
 A production-style machine learning service that predicts diabetes from the 8 clinical features of the
 **PIMA Indians Diabetes** dataset. It covers the full lifecycle: reproducible training, a single
 serialized preprocessing + model pipeline, a validated REST API, privacy-safe logging, automated tests,
-a hardened Docker image, GitHub Actions CI, and serverless deployment to Google Cloud Run.
+a hardened Docker image, and GitHub Actions CI. It is **deployment-ready for Google Cloud Run**: the
+Dockerfile, an optional deploy workflow and a step-by-step guide are included (no public instance is
+running at the moment).
 
 > ⚠️ **Disclaimer:** educational/portfolio project. It is **not** a medical device and must not be used
 > for diagnosis or treatment decisions.
@@ -46,7 +48,7 @@ a hardened Docker image, GitHub Actions CI, and serverless deployment to Google 
                    └─► JSON logs (request id, path, status, latency — never patient data)
 
  GitHub push ──► Actions CI: lint → pytest → train smoke test → docker build → container smoke test
- Manual run  ──► Actions CD: build → push to Artifact Registry → deploy to Cloud Run
+ Manual run  ──► Actions CD (optional): build → push to Artifact Registry → deploy to Cloud Run
 ```
 
 ## Project structure
