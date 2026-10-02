@@ -8,9 +8,7 @@
 A production-style machine learning service that predicts diabetes from the 8 clinical features of the
 **PIMA Indians Diabetes** dataset. It covers the full lifecycle: reproducible training, a single
 serialized preprocessing + model pipeline, a validated REST API, privacy-safe logging, automated tests,
-a hardened Docker image, and GitHub Actions CI. It is **deployment-ready for Google Cloud Run**: the
-Dockerfile, an optional deploy workflow and a step-by-step guide are included (no public instance is
-running at the moment).
+a hardened Docker image, and GitHub Actions CI.
 
 > ⚠️ **Disclaimer:** educational/portfolio project. It is **not** a medical device and must not be used
 > for diagnosis or treatment decisions.
@@ -25,11 +23,8 @@ running at the moment).
 5. [API reference](#api-reference)
 6. [Testing](#testing)
 7. [Docker](#docker)
-8. [CI/CD](#cicd)
-9. [Deployment (Google Cloud Run)](#deployment-google-cloud-run)
-10. [Other clouds](#other-clouds)
-11. [Logging & privacy](#logging--privacy)
-12. [Push to GitHub](#push-to-github)
+8. [Continuous integration](#continuous-integration)
+9. [Logging & privacy](#logging--privacy)
 
 ---
 
@@ -48,7 +43,6 @@ running at the moment).
                    └─► JSON logs (request id, path, status, latency — never patient data)
 
  GitHub push ──► Actions CI: lint → pytest → train smoke test → docker build → container smoke test
- Manual run  ──► Actions CD (optional): build → push to Artifact Registry → deploy to Cloud Run
 ```
 
 ## Project structure
@@ -66,8 +60,7 @@ diabetes-ml-api/
 ├── training/train.py      # Data download, CV model selection, evaluation, artifact export
 ├── tests/                 # pytest: API, model/pipeline, logging privacy
 ├── .github/workflows/
-│   ├── ci.yml             # CI: lint, test, train, docker build + smoke test
-│   └── deploy-cloudrun.yml# Optional manual CD to Google Cloud Run
+│   └── ci.yml             # CI: lint, test, train, docker build + smoke test
 ├── Dockerfile             # Multi-stage: train in builder, slim non-root runtime
 ├── requirements.txt       # Pinned runtime dependencies
 ├── requirements-dev.txt   # + pytest, httpx, ruff
@@ -169,7 +162,7 @@ Configuration (environment variables, see `.env.example`):
 | `METADATA_PATH` | `models/metadata.json` | Model metadata |
 | `DECISION_THRESHOLD` | `0.5` | Probability cut-off for class 1 |
 | `LOG_LEVEL` | `INFO` | Logging level |
-| `PORT` | `8000` | Port (Docker / Cloud Run) |
+| `PORT` | `8000` | Port the container listens on |
 
 ## API reference
 
@@ -264,7 +257,7 @@ so it needs neither the real dataset nor a pre-trained artifact. It covers:
 The multi-stage `Dockerfile`:
 - **Stage 1 (trainer):** installs dependencies, downloads + verifies the dataset, trains the pipeline.
 - **Stage 2 (runtime):** `python:3.12-slim`, runtime dependencies only, copies the trained model and app
-  code, runs as a **non-root** user, has a `HEALTHCHECK`, and honours `$PORT` (required by Cloud Run).
+  code, runs as a **non-root** user, has a `HEALTHCHECK`, and honours `$PORT`.
 
 ```bash
 docker build -t diabetes-api:local .
@@ -277,7 +270,7 @@ curl http://127.0.0.1:8000/health
 docker logs diabetes-api      # JSON logs (from another terminal)
 ```
 
-## CI/CD
+## Continuous integration
 
 **`.github/workflows/ci.yml`** runs on every push and pull request to `main`:
 
@@ -288,148 +281,9 @@ docker logs diabetes-api      # JSON logs (from another terminal)
 5. Build the Docker image with Buildx and the GitHub Actions cache.
 6. Start the container, poll `/health`, call `/predict` and print the container logs.
 
-**`.github/workflows/deploy-cloudrun.yml`** is optional and runs only when you trigger it manually. It
-authenticates to Google Cloud with **Workload Identity Federation**, so no JSON key is stored in
-GitHub. It then builds and pushes the image to Artifact Registry, deploys to Cloud Run, and smoke-tests
-the live URL. Setup is described [below](#optional-automated-deploys-from-github-actions).
-
-## Deployment (Google Cloud Run)
-
-### Why Cloud Run
-
-Free-tier offers checked on 3 October 2026:
-
-| Provider | Offer | Fit |
-|---|---|---|
-| **Google Cloud Run** | Always-free monthly allowance (request-based billing): 180,000 vCPU-seconds, 360,000 GiB-seconds, 2 million requests. Cloud Build: 2,500 build-minutes/month (e2-standard-2). Artifact Registry: 0.5 GB storage/month. New accounts also get $300 of credit. | ✅ **Recommended.** Serverless containers that scale to zero, plus always-free limits that don't expire |
-| Azure Container Apps | Monthly free grant: 180,000 vCPU-seconds, 360,000 GiB-seconds, 2 million requests | ✅ Good alternative |
-| AWS | New-account Free plan: $100 credit plus up to $100 more by completing activities, valid for 6 months. The account closes when the credits or the 6 months run out, unless you upgrade. | ⚠️ Time-limited |
-
-Free tiers change. Re-check [cloud.google.com/run/pricing](https://cloud.google.com/run/pricing) and
-[cloud.google.com/free](https://cloud.google.com/free) before you deploy. Cloud Run still requires a
-billing account. Usage above the free allowance is billed, so set a budget alert (step 2).
-
-### Step-by-step (manual deploy with `gcloud`)
-
-Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install), then:
-
-```bash
-# 1. Log in and choose a project
-gcloud auth login
-gcloud projects create YOUR_PROJECT_ID          # or reuse an existing project
-gcloud config set project YOUR_PROJECT_ID
-# Link a billing account: Console -> Billing -> Link a billing account (required by Cloud Run)
-
-# 2. Protect yourself: create a small budget alert
-#    Console -> Billing -> Budgets & alerts -> Create budget (e.g. $1 with email alerts)
-
-# 3. Enable the required APIs
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
-
-# 4. Create a Docker repository in Artifact Registry
-export REGION=us-central1
-export PROJECT_ID=$(gcloud config get-value project)
-gcloud artifacts repositories create ml-images \
-  --repository-format=docker --location=$REGION \
-  --description="Container images for ML services"
-
-# 5. Build the image with Cloud Build and push it (uses the Dockerfile; trains the model during the build)
-export IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/ml-images/diabetes-api:1.0.0
-gcloud builds submit --tag $IMAGE .
-
-# 6. Deploy to Cloud Run (scale-to-zero, max 1 instance to stay within free usage)
-gcloud run deploy diabetes-api \
-  --image=$IMAGE \
-  --region=$REGION \
-  --allow-unauthenticated \
-  --memory=512Mi --cpu=1 \
-  --min-instances=0 --max-instances=1 \
-  --port=8000
-
-# 7. Test the live service
-export URL=$(gcloud run services describe diabetes-api --region=$REGION --format='value(status.url)')
-curl $URL/health
-curl -X POST $URL/predict -H "Content-Type: application/json" \
-  -d '{"pregnancies":6,"glucose":148,"blood_pressure":72,"skin_thickness":35,"insulin":0,"bmi":33.6,"diabetes_pedigree_function":0.627,"age":50}'
-
-# 8. View logs (JSON, no patient data)
-gcloud run services logs read diabetes-api --region=$REGION --limit=20
-```
-
-Keep Artifact Registry under its 0.5 GB free storage by deleting old image versions:
-
-```bash
-gcloud artifacts docker images list $REGION-docker.pkg.dev/$PROJECT_ID/ml-images/diabetes-api --include-tags
-gcloud artifacts docker images delete $REGION-docker.pkg.dev/$PROJECT_ID/ml-images/diabetes-api:OLD_TAG
-```
-
-Tear everything down when finished:
-
-```bash
-gcloud run services delete diabetes-api --region=$REGION
-gcloud artifacts repositories delete ml-images --location=$REGION
-```
-
-### Optional: automated deploys from GitHub Actions
-
-One-time setup of Workload Identity Federation (replace `YOUR_PROJECT_ID`; `Laiba-Gul/diabetes-ml-api`
-is the GitHub repo allowed to deploy):
-
-```bash
-export PROJECT_ID=YOUR_PROJECT_ID
-export PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
-export REPO=Laiba-Gul/diabetes-ml-api
-
-gcloud services enable iamcredentials.googleapis.com
-
-gcloud iam service-accounts create github-deployer --display-name="GitHub Actions deployer"
-export SA=github-deployer@$PROJECT_ID.iam.gserviceaccount.com
-for ROLE in roles/run.admin roles/artifactregistry.writer roles/iam.serviceAccountUser; do
-  gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:$SA" --role="$ROLE"
-done
-
-gcloud iam workload-identity-pools create github --location=global --display-name="GitHub"
-gcloud iam workload-identity-pools providers create-oidc github-provider \
-  --location=global --workload-identity-pool=github \
-  --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
-  --attribute-condition="assertion.repository=='$REPO'"
-
-gcloud iam service-accounts add-iam-policy-binding $SA \
-  --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/$REPO"
-
-echo "GCP_WORKLOAD_IDENTITY_PROVIDER=projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github-provider"
-echo "GCP_SERVICE_ACCOUNT=$SA"
-```
-
-In GitHub, go to **Settings → Secrets and variables → Actions → Variables** and add `GCP_PROJECT_ID`,
-`GCP_REGION` (`us-central1`), `GAR_REPOSITORY` (`ml-images`), `GCP_WORKLOAD_IDENTITY_PROVIDER` and
-`GCP_SERVICE_ACCOUNT`. Then open **Actions → Deploy to Cloud Run → Run workflow**.
-
-## Other clouds
-
-**Azure Container Apps** (monthly free grant, see table above). With the Azure CLI:
-
-```bash
-az login
-az group create --name diabetes-rg --location eastus
-az containerapp up --name diabetes-api --resource-group diabetes-rg --location eastus \
-  --environment diabetes-env --source .
-```
-
-`--source .` builds the image from the Dockerfile, and the target port comes from `EXPOSE 8000`. This
-command also creates an Azure Container Registry, which has its own cost outside the Container Apps
-free grant. Delete the resource group when you're done: `az group delete --name diabetes-rg`.
-
-**AWS.** The new-account Free plan is credit-based and lasts 6 months, so it is less suitable for a
-portfolio service that should stay online. The same image runs on any container service there (for
-example, push to ECR and run on ECS Fargate). Check the current free plan at
-[aws.amazon.com/free](https://aws.amazon.com/free/) before deploying.
-
 ## Logging & privacy
 
-- Logs are structured JSON on stdout, which Cloud Run / Azure / CloudWatch ingest natively.
+- Logs are structured JSON on stdout, ready for any log aggregation tool.
 - Each request produces one line containing only `request_id`, `method`, `path`, `status_code` and
   `latency_ms`. `X-Request-ID` is returned so a client can correlate requests.
 - **Request bodies, feature values and predictions are never logged.** The formatter also drops any
@@ -437,24 +291,8 @@ example, push to ECR and run on ECS Fargate). Check the current free plan at
   enforced by tests.
 - Uvicorn's access log is disabled because it would record client IPs.
 - Validation errors don't echo the submitted values back.
-- Datasets, model files, `.env` files and cloud credentials are excluded by `.gitignore` and
-  `.dockerignore`. CI/CD uses keyless Workload Identity Federation.
-
-## Push to GitHub
-
-```bash
-cd diabetes-ml-api
-git init -b main
-git add .
-git status                      # confirm data/*.csv, models/*.joblib and .env are NOT listed
-git commit -m "Diabetes prediction API: training pipeline, FastAPI service, tests, Docker, CI"
-
-# Create an empty repository named diabetes-ml-api on github.com (no README/.gitignore), then:
-git remote add origin https://github.com/Laiba-Gul/diabetes-ml-api.git
-git push -u origin main
-```
-
-The CI workflow starts automatically. Check its result in the repository's **Actions** tab.
+- Datasets, model files, `.env` files and credentials are excluded by `.gitignore` and
+  `.dockerignore`.
 
 ## Possible extensions
 - Track experiments and register models with MLflow.
